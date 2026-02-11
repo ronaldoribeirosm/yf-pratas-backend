@@ -15,6 +15,7 @@ require('dotenv').config();
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+const BACKEND_URL = process.env.BACKEND_URL || 'https://yf-pratas-backend.onrender.com';
 
 // --- DEFINIÇÃO DA URL DO FRONTEND (PRODUÇÃO VS LOCAL) ---
 // Em produção (Hospedagem), defina FRONTEND_URL no .env com o link do seu site (sem barra no final)
@@ -160,7 +161,7 @@ app.post('/auth/2fa/enable', async (req, res) => {
 //              PRODUTOS
 // ==========================================
 
-app.get('/produtos', async (req, res) => {
+aapp.get('/produtos', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM produtos ORDER BY id ASC');
         res.json(result.rows);
@@ -186,8 +187,10 @@ app.get('/produtos/:id', async (req, res) => {
 
 app.post('/produtos', upload.single('imagem'), async (req, res) => {
     const { nome, descricao, preco, categoria, estoque } = req.body;
-    // URL da imagem (ajustar em produção se usar S3)
-    let img = req.file ? `http://localhost:3000/uploads/${req.file.filename}` : 'https://via.placeholder.com/150';
+    
+    // 🚀 CORREÇÃO: Agora salva com o link do Render e não mais localhost!
+    let img = req.file ? `${BACKEND_URL}/uploads/${req.file.filename}` : 'https://via.placeholder.com/150';
+    
     try {
         const newP = await pool.query('INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', [nome, descricao, parseFloat(preco), categoria, img, parseInt(estoque)]);
         res.json(newP.rows[0]);
@@ -202,7 +205,9 @@ app.put('/produtos/:id', upload.single('imagem'), async (req, res) => {
         if (old.rows.length === 0) return res.status(404).json({ error: 'Não encontrado' });
         
         let img = old.rows[0].imagem_url;
-        if (req.file) img = `http://localhost:3000/uploads/${req.file.filename}`;
+        
+        // 🚀 CORREÇÃO: Atualiza com o link do Render se enviar imagem nova!
+        if (req.file) img = `${BACKEND_URL}/uploads/${req.file.filename}`;
 
         const up = await pool.query('UPDATE produtos SET nome=$1, descricao=$2, preco=$3, categoria=$4, estoque=$5, imagem_url=$6 WHERE id=$7 RETURNING *', [nome, descricao, parseFloat(preco), categoria, parseInt(estoque), img, id]);
         res.json(up.rows[0]);
@@ -217,7 +222,6 @@ app.delete('/produtos/:id', async (req, res) => {
         res.json({ message: 'Produto deletado com sucesso!', produto: result.rows[0] });
     } catch (e) { res.status(500).json({ error: 'Erro ao deletar' }); }
 });
-
 // ==========================================
 //              CARRINHO
 // ==========================================
