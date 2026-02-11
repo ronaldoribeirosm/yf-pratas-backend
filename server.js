@@ -161,7 +161,7 @@ app.post('/auth/2fa/enable', async (req, res) => {
 //              PRODUTOS
 // ==========================================
 
-aapp.get('/produtos', async (req, res) => {
+app.get('/produtos', async (req, res) => {
     try {
         const result = await pool.query('SELECT * FROM produtos ORDER BY id ASC');
         res.json(result.rows);
