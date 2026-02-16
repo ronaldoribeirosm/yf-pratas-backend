@@ -188,7 +188,6 @@ app.get('/produtos/:id', async (req, res) => {
 app.post('/produtos', upload.single('imagem'), async (req, res) => {
     const { nome, descricao, preco, categoria, estoque } = req.body;
     
-    // 🚀 CORREÇÃO: Agora salva com o link do Render e não mais localhost!
     let img = req.file ? `${BACKEND_URL}/uploads/${req.file.filename}` : 'https://via.placeholder.com/150';
     
     try {
@@ -292,7 +291,7 @@ app.post('/calcular-frete', async (req, res) => {
         let valor = 35.00, prazo = '7-10';
         if (estadoDestino) {
             const uf = estadoDestino.toUpperCase();
-            if (uf === 'SP') { valor = 22.00; prazo = '2-4'; }
+            if (uf === 'SP') { valor = 0.00; prazo = '2-4'; }
             else if (['RJ', 'MG', 'ES'].includes(uf)) { valor = 28.00; prazo = '4-6'; }
             else if (['PR', 'SC', 'RS'].includes(uf)) { valor = 32.00; prazo = '5-8'; }
             else if (['DF', 'GO', 'MS', 'MT'].includes(uf)) { valor = 45.00; prazo = '6-9'; }
