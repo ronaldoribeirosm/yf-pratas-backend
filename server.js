@@ -303,19 +303,46 @@ app.post('/calcular-frete', async (req, res) => {
         res.json(opcoes);
 
     } catch (error) {
-        console.log("⚠️ Falha Correios. Usando Tabela de Estado.");
+        console.log("⚠️ Falha Correios. Usando Tabela Local/Estado.");
+        
+        // Limpa o CEP para garantir que tem só números
+        const cepLimpo = cepDestino ? cepDestino.replace(/\D/g, '') : '';
         
         let valor = 35.00, prazo = '7-10';
+        
         if (estadoDestino) {
             const uf = estadoDestino.toUpperCase();
-            if (uf === 'SP') { valor = 22.00; prazo = '2-4'; }
+            
+            if (uf === 'SP') { 
+                // --- REGRAS LOCAIS (VALE DO PARAÍBA E SERRA) ---
+                if (cepLimpo.startsWith('1246')) {
+                    // Campos do Jordão (Frete Grátis)
+                    valor = 0.00; 
+                    prazo = '1-2';
+                } 
+                else if (cepLimpo.startsWith('120') || cepLimpo.startsWith('121')) {
+                    // Taubaté
+                    valor = 10.00; 
+                    prazo = '2-3';
+                } 
+                else if (cepLimpo.startsWith('122')) {
+                    // São José dos Campos
+                    valor = 15.00; 
+                    prazo = '2-4';
+                } 
+                else {
+                    // Resto de SP (Capital, litoral, interior)
+                    valor = 22.00; 
+                    prazo = '3-5';
+                }
+            }
             else if (['RJ', 'MG', 'ES'].includes(uf)) { valor = 28.00; prazo = '4-6'; }
             else if (['PR', 'SC', 'RS'].includes(uf)) { valor = 32.00; prazo = '5-8'; }
             else if (['DF', 'GO', 'MS', 'MT'].includes(uf)) { valor = 45.00; prazo = '6-9'; }
             else if (['BA', 'SE', 'AL', 'PE', 'PB', 'RN', 'CE', 'PI', 'MA'].includes(uf)) { valor = 58.00; prazo = '8-15'; }
             else { valor = 75.00; prazo = '10-20'; } // Norte
         }
-        res.json([{ tipo: 'Envio Segurado (Transportadora)', valor, prazo }]);
+        res.json([{ tipo: 'Envio Expresso (Transportadora)', valor, prazo }]);
     }
 });
 
