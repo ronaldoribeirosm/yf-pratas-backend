@@ -18,8 +18,6 @@ const PORT = process.env.PORT || 3000;
 const BACKEND_URL = process.env.BACKEND_URL || 'https://yf-pratas-backend.onrender.com';
 
 // --- DEFINIÇÃO DA URL DO FRONTEND (PRODUÇÃO VS LOCAL) ---
-// Em produção (Hospedagem), defina FRONTEND_URL no .env com o link do seu site (sem barra no final)
-// Em teste local, ele assume localhost:5173
 const FRONTEND_URL = process.env.FRONTEND_URL || "http://localhost:5173";
 
 // --- SEGURANÇA E CONFIGURAÇÕES ---
@@ -40,7 +38,7 @@ const transporter = nodemailer.createTransport({
 app.use(cors());
 app.use(express.json());
 
-// --- UPLOAD ---
+// --- UPLOAD (Temporário para enviar pro ImgBB) ---
 app.use('/uploads', express.static('uploads'));
 if (!fs.existsSync('./uploads')) fs.mkdirSync('./uploads');
 
@@ -67,7 +65,7 @@ function authenticateToken(req, res, next) {
 app.get('/', async (req, res) => {
     try {
         const result = await pool.query('SELECT NOW()');
-        res.json({ message: 'API YF Pratas: Online!', time: result.rows[0].now, env: process.env.NODE_ENV });
+        res.json({ message: 'API YF Pratas: Online 🚀', time: result.rows[0].now, env: process.env.NODE_ENV });
     } catch (err) { res.status(500).json({ error: 'Erro no banco de dados' }); }
 });
 
@@ -106,10 +104,8 @@ app.post('/auth/login', async (req, res) => {
 
         // LÓGICA 2FA COMPLETA
         if (user.two_factor_enabled) {
-            // Se não enviou código, gera e envia por e-mail
             if (!code) {
                 const newCode = Math.floor(100000 + Math.random() * 900000).toString();
-                // Expira em 10 minutos
                 await pool.query(`UPDATE usuarios SET email_code = $1, email_code_expires = NOW() + INTERVAL '10 minutes' WHERE id = $2`, [newCode, user.id]);
                 
                 try {
@@ -124,19 +120,12 @@ app.post('/auth/login', async (req, res) => {
                 return res.json({ require2fa: true, message: 'Código enviado para seu e-mail.' }); 
             }
 
-            // Verifica código
-            if (user.email_code !== code) {
-                return res.status(400).json({ error: 'Código inválido.' });
-            }
+            if (user.email_code !== code) return res.status(400).json({ error: 'Código inválido.' });
 
-            // Verifica expiração
             const agora = new Date();
             const validade = new Date(user.email_code_expires);
-            if (agora > validade) {
-                return res.status(400).json({ error: 'Código expirado. Faça login novamente.' });
-            }
+            if (agora > validade) return res.status(400).json({ error: 'Código expirado. Faça login novamente.' });
 
-            // Limpa código após uso
             await pool.query(`UPDATE usuarios SET email_code = NULL WHERE id = $1`, [user.id]);
         }
 
@@ -158,7 +147,7 @@ app.post('/auth/2fa/enable', async (req, res) => {
 });
 
 // ==========================================
-//              PRODUTOS
+//              PRODUTOS (COM IMGBB)
 // ==========================================
 
 app.get('/produtos', async (req, res) => {
@@ -187,13 +176,33 @@ app.get('/produtos/:id', async (req, res) => {
 
 app.post('/produtos', upload.single('imagem'), async (req, res) => {
     const { nome, descricao, preco, categoria, estoque } = req.body;
-    
-    let img = req.file ? `${BACKEND_URL}/uploads/${req.file.filename}` : 'https://via.placeholder.com/150';
+    let imgUrl = 'https://via.placeholder.com/150';
     
     try {
-        const newP = await pool.query('INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', [nome, descricao, parseFloat(preco), categoria, img, parseInt(estoque)]);
+        // 🚀 Faz upload para o ImgBB
+        if (req.file) {
+            const fileData = fs.readFileSync(req.file.path).toString('base64');
+            const formData = new FormData();
+            formData.append('image', fileData);
+
+            const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY}`, {
+                method: 'POST',
+                body: formData
+            }).then(r => r.json());
+
+            if (imgbbRes.success) imgUrl = imgbbRes.data.url;
+            fs.unlinkSync(req.file.path); // Apaga arquivo local do Render
+        }
+
+        const newP = await pool.query(
+            'INSERT INTO produtos (nome, descricao, preco, categoria, imagem_url, estoque) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *', 
+            [nome, descricao, parseFloat(preco), categoria, imgUrl, parseInt(estoque)]
+        );
         res.json(newP.rows[0]);
-    } catch (e) { res.status(500).json({ error: 'Erro ao criar produto' }); }
+    } catch (e) { 
+        console.error("Erro upload:", e);
+        res.status(500).json({ error: 'Erro ao criar produto' }); 
+    }
 });
 
 app.put('/produtos/:id', upload.single('imagem'), async (req, res) => {
@@ -203,12 +212,27 @@ app.put('/produtos/:id', upload.single('imagem'), async (req, res) => {
         const old = await pool.query('SELECT * FROM produtos WHERE id = $1', [id]);
         if (old.rows.length === 0) return res.status(404).json({ error: 'Não encontrado' });
         
-        let img = old.rows[0].imagem_url;
+        let imgUrl = old.rows[0].imagem_url;
         
-        // 🚀 CORREÇÃO: Atualiza com o link do Render se enviar imagem nova!
-        if (req.file) img = `${BACKEND_URL}/uploads/${req.file.filename}`;
+        // 🚀 Atualiza com o ImgBB se enviar imagem nova
+        if (req.file) {
+            const fileData = fs.readFileSync(req.file.path).toString('base64');
+            const formData = new FormData();
+            formData.append('image', fileData);
 
-        const up = await pool.query('UPDATE produtos SET nome=$1, descricao=$2, preco=$3, categoria=$4, estoque=$5, imagem_url=$6 WHERE id=$7 RETURNING *', [nome, descricao, parseFloat(preco), categoria, parseInt(estoque), img, id]);
+            const imgbbRes = await fetch(`https://api.imgbb.com/1/upload?key=${process.env.IMGBB_API_KEY}`, {
+                method: 'POST',
+                body: formData
+            }).then(r => r.json());
+
+            if (imgbbRes.success) imgUrl = imgbbRes.data.url;
+            fs.unlinkSync(req.file.path);
+        }
+
+        const up = await pool.query(
+            'UPDATE produtos SET nome=$1, descricao=$2, preco=$3, categoria=$4, estoque=$5, imagem_url=$6 WHERE id=$7 RETURNING *', 
+            [nome, descricao, parseFloat(preco), categoria, parseInt(estoque), imgUrl, id]
+        );
         res.json(up.rows[0]);
     } catch (e) { res.status(500).json({ error: 'Erro ao editar produto' }); }
 });
@@ -221,6 +245,7 @@ app.delete('/produtos/:id', async (req, res) => {
         res.json({ message: 'Produto deletado com sucesso!', produto: result.rows[0] });
     } catch (e) { res.status(500).json({ error: 'Erro ao deletar' }); }
 });
+
 // ==========================================
 //              CARRINHO
 // ==========================================
@@ -256,11 +281,6 @@ app.delete('/carrinho/:pid', authenticateToken, async (req, res) => {
 //           FRETE E PAGAMENTO
 // ==========================================
 
-// Rota antiga mantida por compatibilidade (se o frontend usar)
-app.post('/create-preference', authenticateToken, async (req, res) => {
-    return res.status(400).json({ message: "Utilize a rota /pedidos para gerar o pagamento" });
-});
-
 app.post('/calcular-frete', async (req, res) => {
     const { cepDestino, estadoDestino } = req.body;
     if (!cepDestino) return res.status(400).json({ error: 'CEP obrigatório' });
@@ -269,7 +289,6 @@ app.post('/calcular-frete', async (req, res) => {
     const args = { sCepOrigem: '12460000', sCepDestino: cepDestino.replace(/\D/g, ''), nVlPeso: '0.3', nCdFormato: '1', nVlComprimento: '16', nVlAltura: '4', nVlLargura: '11', nCdServico: ['04014', '04510'], nVlDiametro: '0' };
 
     try {
-        // Tenta Correios com Timeout de 4s
         const timeoutPromise = new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout Correios')), 4000));
         const response = await Promise.race([calcularPrecoPrazo(args), timeoutPromise]);
         
@@ -281,17 +300,15 @@ app.post('/calcular-frete', async (req, res) => {
         })).filter(i => !i.erro);
         
         if (opcoes.length === 0) throw new Error("Sem opções dos Correios");
-        
         res.json(opcoes);
 
     } catch (error) {
-        console.log("⚠️ Falha Correios/Timeout. Usando Tabela de Estado:", error.message);
+        console.log("⚠️ Falha Correios. Usando Tabela de Estado.");
         
-        // --- LÓGICA MANUAL DE CONTINGÊNCIA (RESTAURADA) ---
         let valor = 35.00, prazo = '7-10';
         if (estadoDestino) {
             const uf = estadoDestino.toUpperCase();
-            if (uf === 'SP') { valor = 0.00; prazo = '2-4'; }
+            if (uf === 'SP') { valor = 22.00; prazo = '2-4'; }
             else if (['RJ', 'MG', 'ES'].includes(uf)) { valor = 28.00; prazo = '4-6'; }
             else if (['PR', 'SC', 'RS'].includes(uf)) { valor = 32.00; prazo = '5-8'; }
             else if (['DF', 'GO', 'MS', 'MT'].includes(uf)) { valor = 45.00; prazo = '6-9'; }
@@ -302,84 +319,81 @@ app.post('/calcular-frete', async (req, res) => {
     }
 });
 
-// ✅ ROTA PRINCIPAL DE PEDIDOS (REDIRECT + PIX + DÉBITO)
+// ✅ ROTA DE PEDIDOS (Com Webhook e ID Real)
 app.post('/pedidos', authenticateToken, async (req, res) => {
     const { dados_cliente, endereco, itens, frete, prazo } = req.body;
     try {
-        console.log("--- 🏁 CRIANDO PREFERÊNCIA DE PAGAMENTO (REDIRECT) 🏁 ---");
-        console.log("🔗 URL Base para Retorno:", FRONTEND_URL);
-
-        // 1. Prepara Itens para o Mercado Pago
-        const itemsMP = itens.map(i => ({ 
-            title: i.nome, 
-            quantity: Number(i.quantity), 
-            currency_id: 'BRL', 
-            unit_price: Number(i.preco) 
-        }));
+        const itemsMP = itens.map(i => ({ title: i.nome, quantity: Number(i.quantity), currency_id: 'BRL', unit_price: Number(i.preco) }));
+        if (frete > 0) itemsMP.push({ title: "Frete / Envio", quantity: 1, currency_id: 'BRL', unit_price: Number(frete) });
         
-        if (frete > 0) {
-            itemsMP.push({ title: "Frete / Envio", quantity: 1, currency_id: 'BRL', unit_price: Number(frete) });
-        }
+        const total = itemsMP.reduce((acc, i) => acc + (i.unit_price * i.quantity), 0);
+        const itensHist = itens.map(i => ({ nome: i.nome, quantity: i.quantity, preco: i.preco }));
+        const detalhes = { valor: frete, prazo: prazo || 'A definir', transportadora: 'Correios' };
 
+        // 1. Cria o Pedido PENDENTE no Banco PRIMEIRO
+        const newOrder = await pool.query(
+            `INSERT INTO pedidos (usuario_id, total, dados_cliente, endereco_entrega, status, itens, detalhes_envio) VALUES ($1, $2, $3, $4, 'pendente', $5, $6) RETURNING id`,
+            [req.user.id, total, JSON.stringify(dados_cliente), JSON.stringify(endereco), JSON.stringify(itensHist), JSON.stringify(detalhes)]
+        );
+        const pedidoId = newOrder.rows[0].id; // ID real do pedido (Ex: 15)
+
+        // 2. Cria a Preferência no Mercado Pago
         const preference = new Preference(client);
-        
-        // Dados do Pagador (Importante para antifraude)
-        const payerInfo = { 
-            name: dados_cliente.nome, 
-            email: dados_cliente.email,
-            identification: { 
-                type: "CPF", 
-                number: dados_cliente.cpf ? dados_cliente.cpf.replace(/\D/g, '') : "00000000000"
-            }
-        };
-        
-        // --- CRIAÇÃO DA PREFERÊNCIA CHECKOUT PRO ---
         const bodyPreference = { 
             items: itemsMP, 
-            payer: payerInfo,
-            
-            // Configurações de Retorno (Usando a variável FRONTEND_URL)
-            back_urls: { 
-                success: `${FRONTEND_URL}/sucesso`, 
-                failure: `${FRONTEND_URL}/`, 
-                pending: `${FRONTEND_URL}/` 
-            }, 
+            payer: { 
+                name: dados_cliente.nome, 
+                email: dados_cliente.email,
+                identification: { type: "CPF", number: dados_cliente.cpf ? dados_cliente.cpf.replace(/\D/g, '') : "00000000000" }
+            },
+            back_urls: { success: `${FRONTEND_URL}/sucesso`, failure: `${FRONTEND_URL}/`, pending: `${FRONTEND_URL}/` }, 
             auto_return: "approved", 
             
-            // Permite todos os métodos (PIX, Boleto, Cartão)
-            payment_methods: {
-                excluded_payment_types: [], 
-                excluded_payment_methods: [],
-                installments: 12
-            },
+            // 🚀 A MÁGICA AQUI: O MP grava o número do seu pedido e te avisa no Webhook
+            external_reference: String(pedidoId), 
+            notification_url: `${BACKEND_URL}/webhook`, 
             
-            external_reference: String(req.user.id),
             statement_descriptor: "YF PRATAS"
         };
 
         const result = await preference.create({ body: bodyPreference });
         
-        const prefId = result.id;
-        const linkPagamento = result.init_point; // Link para redirecionar o usuário
-        
-        console.log("✅ Preferência criada com sucesso! ID:", prefId);
+        // 3. Atualiza o banco com o ID da preferência
+        await pool.query(`UPDATE pedidos SET preference_id = $1 WHERE id = $2`, [result.id, pedidoId]);
 
-        // 2. Salva o Pedido no Banco de Dados
-        const itensHist = itens.map(i => ({ nome: i.nome, quantity: i.quantity, preco: i.preco }));
-        const detalhes = { valor: frete, prazo: prazo || 'A definir', transportadora: 'Correios' };
-        const total = itemsMP.reduce((acc, i) => acc + (i.unit_price * i.quantity), 0);
-
-        const newOrder = await pool.query(
-            `INSERT INTO pedidos (usuario_id, total, dados_cliente, endereco_entrega, preference_id, status, itens, detalhes_envio) VALUES ($1, $2, $3, $4, $5, 'pendente', $6, $7) RETURNING id`,
-            [req.user.id, total, JSON.stringify(dados_cliente), JSON.stringify(endereco), prefId, JSON.stringify(itensHist), JSON.stringify(detalhes)]
-        );
-        
-        // Retorna o LINK para o frontend redirecionar
-        res.json({ id: prefId, pedido_id: newOrder.rows[0].id, url: linkPagamento });
-
+        res.json({ id: result.id, pedido_id: pedidoId, url: result.init_point });
     } catch (e) { 
         console.error("❌ Erro ao criar pedido:", e); 
         res.status(500).json({ error: "Erro ao processar pedido no servidor." }); 
+    }
+});
+
+// ==========================================
+//      WEBHOOK (Ouvinte do Mercado Pago)
+// ==========================================
+app.post('/webhook', async (req, res) => {
+    // 🚀 O Mercado Pago exige que você responda 200 IMEDIATAMENTE!
+    res.sendStatus(200); 
+
+    const paymentId = req.query['data.id'] || (req.body && req.body.data && req.body.data.id);
+    
+    if (paymentId) {
+        try {
+            // Pergunta pro Mercado Pago detalhes deste pagamento
+            const payment = await fetch(`https://api.mercadopago.com/v1/payments/${paymentId}`, { 
+                headers: { 'Authorization': `Bearer ${process.env.MP_ACCESS_TOKEN}` } 
+            }).then(r => r.json());
+            
+            if (payment.status === 'approved') {
+                const pedidoId = payment.external_reference; // O ID do pedido que mandamos lá na Rota /pedidos!
+                
+                if (pedidoId && pedidoId !== 'null') {
+                    // Atualiza o banco de dados sozinho para PAGO!
+                    await pool.query(`UPDATE pedidos SET status = 'pago' WHERE id = $1`, [pedidoId]);
+                    console.log(`✅ Pagamento Aprovado! Pedido ${pedidoId} atualizado para PAGO.`);
+                }
+            }
+        } catch (e) { console.error("Erro ao verificar pagamento no Webhook:", e); }
     }
 });
 
@@ -404,7 +418,6 @@ app.get('/admin/pedidos', authenticateToken, async (req, res) => {
     } catch (e) { res.status(500).json({ error: 'Erro ao buscar pedidos (admin)' }); }
 });
 
-// Admin: Atualizar status e código de rastreio
 app.put('/admin/pedidos/:id/status', authenticateToken, async (req, res) => {
     const { id } = req.params;
     const { status, codigo_rastreio } = req.body;
@@ -420,23 +433,6 @@ app.put('/admin/pedidos/:id/status', authenticateToken, async (req, res) => {
         }
         res.json({ message: 'Status atualizado!' });
     } catch (e) { res.status(500).json({ error: 'Erro ao atualizar pedido' }); }
-});
-
-// --- VERIFICAÇÃO DE PAGAMENTO (WEBHOOK) ---
-app.post('/verificar-pagamento', async (req, res) => {
-    const { payment_id, preference_id } = req.body;
-    try {
-        const payment = await fetch(`https://api.mercadopago.com/v1/payments/${payment_id}`, { headers: { 'Authorization': `Bearer ${process.env.MP_ACCESS_TOKEN}` } }).then(r => r.json());
-        
-        if (payment.status === 'approved') {
-            await pool.query(`UPDATE pedidos SET status = 'pago' WHERE preference_id = $1`, [preference_id]);
-            return res.json({ status: 'approved' });
-        }
-        res.json({ status: payment.status });
-    } catch (e) { 
-        console.error("Erro no webhook:", e);
-        res.status(500).json({ error: "Erro ao verificar pagamento" }); 
-    }
 });
 
 app.listen(PORT, () => console.log(`🚀 Servidor rodando na porta ${PORT} | Front: ${FRONTEND_URL}`));
